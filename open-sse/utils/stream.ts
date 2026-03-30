@@ -223,7 +223,7 @@ export function createSSEStream(options: StreamOptions = {}) {
 
           // Passthrough mode: normalize and forward
           if (mode === STREAM_MODE.PASSTHROUGH) {
-            let output;
+            let output: string;
             let injectedUsage = false;
             let clientPayload: unknown = null;
 

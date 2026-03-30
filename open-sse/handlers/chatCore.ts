@@ -938,7 +938,13 @@ export async function handleChatCore({
     nativeCodexPassthrough ? { ...credentials, requestEndpointPath: endpointPath } : credentials;
 
   // Create stream controller for disconnect detection
-  const streamController = createStreamController({ onDisconnect, log, provider, model });
+  const streamController = createStreamController({
+    onDisconnect,
+    log,
+    provider,
+    model,
+    sourceFormat,
+  });
 
   const dedupRequestBody = { ...translatedBody, model: `${provider}/${model}` };
   const dedupEnabled = shouldDeduplicate(dedupRequestBody);
