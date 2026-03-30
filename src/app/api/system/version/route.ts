@@ -19,6 +19,14 @@ const execFileAsync = promisify(execFile);
 
 export const dynamic = "force-dynamic";
 
+function isBuiltInUpdaterDisabled(): boolean {
+  return process.env.OMNIROUTE_DISABLE_SELF_UPDATE !== "false";
+}
+
+function getBuiltInUpdaterDisabledReason(): string {
+  return "Built-in updater is disabled for this deployment.";
+}
+
 async function getLatestNpmVersion(): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync("npm", ["info", "omniroute", "version", "--json"], {
@@ -54,6 +62,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  if (isBuiltInUpdaterDisabled()) {
+    const current = getCurrentVersion();
+    const latest = await getLatestNpmVersion();
+
+    return NextResponse.json({
+      current,
+      latest: latest ?? "unavailable",
+      updateAvailable: false,
+      channel: "disabled",
+      autoUpdateSupported: false,
+      autoUpdateError: getBuiltInUpdaterDisabledReason(),
+    });
+  }
+
   const current = getCurrentVersion();
   const latest = await getLatestNpmVersion();
   const updateAvailable = isNewer(latest, current);
@@ -73,6 +95,16 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   if (!(await isAuthenticated(req))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isBuiltInUpdaterDisabled()) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: getBuiltInUpdaterDisabledReason(),
+      },
+      { status: 403 }
+    );
   }
 
   const current = getCurrentVersion();
