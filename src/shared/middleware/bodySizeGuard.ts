@@ -13,8 +13,8 @@
  * @module shared/middleware/bodySizeGuard
  */
 
-/** Default maximum body size: 10 MB */
-const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
+/** Default maximum body size: 50 MB */
+const DEFAULT_MAX_BODY_BYTES = 50 * 1024 * 1024;
 
 /** Larger limit for backup/import routes: 100 MB */
 export const MAX_BODY_BYTES_IMPORT = 100 * 1024 * 1024;
@@ -22,7 +22,7 @@ export const MAX_BODY_BYTES_IMPORT = 100 * 1024 * 1024;
 /** Larger limit for audio transcription uploads: 100 MB */
 export const MAX_BODY_BYTES_AUDIO = 100 * 1024 * 1024;
 
-/** Configured limit — reads from env or falls back to 10 MB */
+/** Configured limit — reads from env or falls back to 50 MB */
 export const MAX_BODY_BYTES = parseInt(
   process.env.MAX_BODY_SIZE_BYTES || String(DEFAULT_MAX_BODY_BYTES),
   10
