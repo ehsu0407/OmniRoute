@@ -49,21 +49,16 @@ jobs:
             set -euo pipefail
             export PATH=/home/omniroute/.local/bin:/opt/node22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
             REPO_DIR=/home/omniroute/OmniRoute
-            REPO_URL=__REPO_URL__
             DEPLOY_REF=__DEPLOY_REF__
+            ARCHIVE_URL="https://codeload.github.com/${{ github.repository }}/tar.gz/$DEPLOY_REF"
+            ARCHIVE_PATH=/tmp/omniroute-deploy.tar.gz
 
-            if [ ! -d "$REPO_DIR/.git" ]; then
-              mkdir -p "$(dirname "$REPO_DIR")"
-              git clone "$REPO_URL" "$REPO_DIR"
-            fi
+            rm -rf "$REPO_DIR" "$ARCHIVE_PATH"
+            mkdir -p "$REPO_DIR"
+            curl -fsSL "$ARCHIVE_URL" -o "$ARCHIVE_PATH"
+            tar -xzf "$ARCHIVE_PATH" -C "$REPO_DIR" --strip-components=1
 
             cd "$REPO_DIR"
-            git remote set-url origin "$REPO_URL"
-            git fetch origin --tags --prune
-            git checkout --force "$DEPLOY_REF"
-            git reset --hard "$DEPLOY_REF"
-            git clean -fdx
-
             npm ci --no-audit --no-fund
             JWT_SECRET=ci-deploy-secret-with-sufficient-length-for-validation node scripts/prepublish.mjs
             npm install -g "$REPO_DIR"
@@ -71,11 +66,17 @@ jobs:
             pm2 restart omniroute || pm2 start omniroute --name omniroute -- --port 20128
             pm2 save
 
+            for attempt in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:20128/login >/dev/null; then
+                break
+              fi
+              sleep 2
+            done
+
             curl -fsS http://127.0.0.1:20128/login >/dev/null
             omniroute --version
         run: |
-          export DEPLOY_SCRIPT_RENDERED="${DEPLOY_SCRIPT//__REPO_URL__/$REPO_URL}"
-          export DEPLOY_SCRIPT_RENDERED="${DEPLOY_SCRIPT_RENDERED//__DEPLOY_REF__/$DEPLOY_REF}"
+          export DEPLOY_SCRIPT_RENDERED="${DEPLOY_SCRIPT//__DEPLOY_REF__/$DEPLOY_REF}"
           COMMANDS_JSON=$(python3 - <<'PY'
           import json, os
           script = os.environ["DEPLOY_SCRIPT_RENDERED"]
