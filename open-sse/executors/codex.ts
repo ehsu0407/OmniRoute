@@ -115,6 +115,58 @@ type EffortLevel = (typeof EFFORT_ORDER)[number];
 const CODEX_FAST_WIRE_VALUE = "priority";
 let defaultFastServiceTierEnabled = false;
 
+function normalizeResponsesInputItem(item: any) {
+  if (typeof item === "string") {
+    return {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: item }],
+    };
+  }
+
+  if (!item || typeof item !== "object") return item;
+
+  if (item.type || item.role) {
+    return item.type ? item : { type: "message", ...item };
+  }
+
+  if (typeof item.text === "string") {
+    return {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: item.text }],
+    };
+  }
+
+  return item;
+}
+
+function normalizeResponsesInputShape(body: any) {
+  if (!body || typeof body !== "object") return body;
+
+  if (typeof body.input === "string") {
+    body.input = [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: body.input }],
+      },
+    ];
+    return body;
+  }
+
+  if (Array.isArray(body.input)) {
+    body.input = body.input.map(normalizeResponsesInputItem);
+    return body;
+  }
+
+  if (body.input && typeof body.input === "object") {
+    body.input = [normalizeResponsesInputItem(body.input)];
+  }
+
+  return body;
+}
+
 function getResponsesSubpath(endpointPath: unknown): string | null {
   const normalizedEndpoint = String(endpointPath || "").replace(/\/+$/, "");
   const match = normalizedEndpoint.match(/(?:^|\/)responses(?:(\/.*))?$/i);
@@ -271,6 +323,8 @@ export class CodexExecutor extends BaseExecutor {
     body.store = false;
 
     if (nativeCodexPassthrough) {
+      normalizeResponsesInputShape(body);
+      delete body.max_output_tokens;
       return body;
     }
 
