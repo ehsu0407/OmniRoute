@@ -1,5 +1,8 @@
 // Stream handler with disconnect detection - shared for all providers
 
+import { FORMATS } from "../translator/formats.ts";
+import { formatSSE } from "./streamHelpers.ts";
+
 type StreamDisconnectEvent = {
   reason: string;
   duration: number;
@@ -10,6 +13,7 @@ type StreamControllerOptions = {
   log?: unknown;
   provider?: string;
   model?: string;
+  sourceFormat?: string;
 };
 
 type StreamController = ReturnType<typeof createStreamController>;
@@ -38,6 +42,7 @@ export function createStreamController({
   log,
   provider,
   model,
+  sourceFormat,
 }: StreamControllerOptions = {}) {
   const abortController = new AbortController();
   const startTime = Date.now();
@@ -55,6 +60,7 @@ export function createStreamController({
   return {
     signal: abortController.signal,
     startTime,
+    sourceFormat,
 
     isConnected: () => !disconnected,
 
@@ -109,6 +115,37 @@ export function createStreamController({
   };
 }
 
+function buildStreamErrorEvent(errorMsg: string, statusCode: number, sourceFormat?: string) {
+  if (sourceFormat === FORMATS.OPENAI_RESPONSES) {
+    return {
+      event: "error",
+      data: {
+        type: "error",
+        error: {
+          code: String(statusCode),
+          message: errorMsg,
+        },
+      },
+    };
+  }
+
+  return {
+    object: "chat.completion.chunk",
+    choices: [
+      {
+        index: 0,
+        delta: {},
+        finish_reason: "error",
+      },
+    ],
+    error: {
+      message: errorMsg,
+      type: "upstream_error",
+      code: statusCode,
+    },
+  };
+}
+
 /**
  * Create transform stream with disconnect detection
  * Wraps existing transform stream and adds abort capability
@@ -143,24 +180,11 @@ export function createDisconnectAwareStream(transformStream, streamController) {
             ? Number((error as { statusCode?: unknown }).statusCode) || 500
             : 500;
 
-        const errorEvent = {
-          object: "chat.completion.chunk",
-          choices: [
-            {
-              index: 0,
-              delta: {},
-              finish_reason: "error",
-            },
-          ],
-          error: {
-            message: errorMsg,
-            type: "upstream_error",
-            code: statusCode,
-          },
-        };
-
         const encoder = new TextEncoder();
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
+        const errorEvent = buildStreamErrorEvent(errorMsg, statusCode, streamController.sourceFormat);
+        controller.enqueue(
+          encoder.encode(formatSSE(errorEvent, streamController.sourceFormat || FORMATS.OPENAI))
+        );
         controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
 
         controller.close();
