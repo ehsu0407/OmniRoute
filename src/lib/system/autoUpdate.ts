@@ -65,16 +65,8 @@ export function getAutoUpdateConfig(env: NodeJS.ProcessEnv = process.env): AutoU
   const dataDir = env.DATA_DIR || "/tmp/omniroute";
   const repoDir = env.AUTO_UPDATE_REPO_DIR || "/workspace/omniroute";
 
-  let mode = normalizeMode(env.AUTO_UPDATE_MODE);
-  if (mode === "npm") {
-    const fs = require("node:fs");
-    if (fs.existsSync(path.join(process.cwd(), ".git"))) {
-      mode = "source" as any;
-    }
-  }
-
   return {
-    mode,
+    mode: normalizeMode(env.AUTO_UPDATE_MODE),
     repoDir,
     composeFile: env.AUTO_UPDATE_COMPOSE_FILE || path.join(repoDir, "docker-compose.yml"),
     composeProfile: env.AUTO_UPDATE_COMPOSE_PROFILE || "cli",
