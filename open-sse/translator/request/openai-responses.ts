@@ -18,8 +18,27 @@ function toArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function toString(value: unknown, fallback = ""): string {
+function asString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
+}
+
+function extractText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((partValue) => {
+      const part = toRecord(partValue);
+      if (
+        (part.type === "input_text" || part.type === "text" || part.type === "output_text") &&
+        typeof part.text === "string"
+      ) {
+        return part.text.trim();
+      }
+      if (typeof part.content === "string") return part.content.trim();
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function unsupportedFeature(message: string): Error & { statusCode: number; errorType: string } {
@@ -50,7 +69,7 @@ export function openaiResponsesToOpenAIRequest(
   if (tools.length > 0) {
     for (const toolValue of tools) {
       const tool = toRecord(toolValue);
-      const toolType = toString(tool.type);
+      const toolType = asString(tool.type);
       // Allow: function tools, and tools already in Chat format (have .function property)
       if (toolType && toolType !== "function" && !tool.function) {
         throw unsupportedFeature(
@@ -70,24 +89,47 @@ export function openaiResponsesToOpenAIRequest(
   const messages: JsonRecord[] = [];
   result.messages = messages;
 
+  const extractedInstructions: string[] = [];
+  const inputItems = toArray(root.input);
+
+  for (const itemValue of inputItems) {
+    const item = toRecord(itemValue);
+    const itemType = asString(item.type) || (item.role ? "message" : "");
+    if (itemType !== "message") continue;
+    const role = asString(item.role);
+    if (role !== "developer" && role !== "system") continue;
+    const text = extractText(item.content);
+    if (text) extractedInstructions.push(text);
+  }
+
+  const instructionParts = [] as string[];
+  if (typeof root.instructions === "string" && root.instructions.trim()) {
+    instructionParts.push(root.instructions.trim());
+  }
+  instructionParts.push(...extractedInstructions);
+
   // Convert instructions to system message
-  if (typeof root.instructions === "string" && root.instructions.length > 0) {
-    messages.push({ role: "system", content: root.instructions });
+  if (instructionParts.length > 0) {
+    messages.push({ role: "system", content: instructionParts.join("\n\n") });
   }
 
   // Group items by conversation turn
   let currentAssistantMsg: JsonRecord | null = null;
   let pendingToolResults: JsonRecord[] = [];
 
-  const inputItems = toArray(root.input);
   for (const itemValue of inputItems) {
     const item = toRecord(itemValue);
 
     // Determine item type - Droid CLI sends role-based items without 'type' field
     // Fallback: if no type but has role property, treat as message
-    const itemType = toString(item.type) || (item.role ? "message" : "");
+    const itemType = asString(item.type) || (item.role ? "message" : "");
 
     if (itemType === "message") {
+      const role = asString(item.role);
+      if (role === "developer" || role === "system") {
+        continue;
+      }
+
       // Flush pending assistant message with tool calls
       if (currentAssistantMsg) {
         messages.push(currentAssistantMsg);
@@ -107,15 +149,15 @@ export function openaiResponsesToOpenAIRequest(
         ? item.content.map((contentValue) => {
             const contentItem = toRecord(contentValue);
             if (contentItem.type === "input_text") {
-              return { type: "text", text: toString(contentItem.text) };
+              return { type: "text", text: asString(contentItem.text) };
             }
             if (contentItem.type === "output_text") {
-              return { type: "text", text: toString(contentItem.text) };
+              return { type: "text", text: asString(contentItem.text) };
             }
             if (contentItem.type === "input_image") {
               const imgResult: JsonRecord = {
                 type: "image_url",
-                image_url: { url: toString(contentItem.image_url) },
+                image_url: { url: asString(contentItem.image_url) },
               };
               if (contentItem.detail !== undefined) {
                 (imgResult.image_url as JsonRecord).detail = contentItem.detail;
@@ -134,13 +176,13 @@ export function openaiResponsesToOpenAIRequest(
           })
         : item.content;
 
-      messages.push({ role: toString(item.role), content });
+      messages.push({ role: asString(item.role), content });
       continue;
     }
 
     if (itemType === "function_call") {
       // Skip tool calls with empty names to avoid infinite placeholder_tool loops
-      const fnName = toString(item.name).trim();
+      const fnName = asString(item.name).trim();
       if (!fnName) {
         continue;
       }
@@ -158,7 +200,7 @@ export function openaiResponsesToOpenAIRequest(
         ? currentAssistantMsg.tool_calls
         : [];
       toolCalls.push({
-        id: toString(item.call_id),
+        id: asString(item.call_id),
         type: "function",
         function: {
           name: fnName,
@@ -190,7 +232,7 @@ export function openaiResponsesToOpenAIRequest(
       // Add tool result immediately
       messages.push({
         role: "tool",
-        tool_call_id: toString(item.call_id),
+        tool_call_id: asString(item.call_id),
         content: typeof item.output === "string" ? item.output : JSON.stringify(item.output),
       });
       continue;
@@ -220,8 +262,8 @@ export function openaiResponsesToOpenAIRequest(
       return {
         type: "function",
         function: {
-          name: toString(tool.name),
-          description: toString(tool.description),
+          name: asString(tool.name),
+          description: asString(tool.description),
           parameters: tool.parameters,
           strict: tool.strict,
         },
@@ -254,7 +296,7 @@ export function openaiResponsesToOpenAIRequest(
     !Array.isArray(result.tool_choice)
   ) {
     const tc = toRecord(result.tool_choice);
-    const tcType = toString(tc.type);
+    const tcType = asString(tc.type);
     if (tcType === "function" && tc.name !== undefined && !tc.function) {
       result.tool_choice = { type: "function", function: { name: tc.name } };
     } else if (tcType && tcType !== "function" && tcType !== "allowed_tools") {
@@ -271,6 +313,7 @@ export function openaiResponsesToOpenAIRequest(
   delete result.input;
   delete result.instructions;
   delete result.include;
+  delete result.max_output_tokens;
   delete result.store;
   delete result.reasoning;
 
@@ -305,7 +348,7 @@ export function openaiToOpenAIResponsesRequest(
 
   for (const messageValue of messages) {
     const msg = toRecord(messageValue);
-    const role = toString(msg.role);
+    const role = asString(msg.role);
 
     if (role === "system") {
       if (!hasSystemMessage) {
@@ -324,7 +367,7 @@ export function openaiToOpenAIResponsesRequest(
             ? msg.content.map((contentValue) => {
                 const contentItem = toRecord(contentValue);
                 if (contentItem.type === "text") {
-                  return { type: "input_text", text: toString(contentItem.text) };
+                  return { type: "input_text", text: asString(contentItem.text) };
                 }
                 if (contentItem.type === "image_url") {
                   const imgUrl = contentItem.image_url as
@@ -373,10 +416,10 @@ export function openaiToOpenAIResponsesRequest(
         outputContent.push({ type: "output_text", text: msg.content });
       } else if (Array.isArray(msg.content)) {
         for (const contentValue of msg.content) {
-          const contentItem = toRecord(contentValue);
-          if (contentItem.type === "text") {
-            outputContent.push({ type: "output_text", text: toString(contentItem.text) });
-          } else if (contentItem.type === "thinking" || contentItem.type === "redacted_thinking") {
+                const contentItem = toRecord(contentValue);
+                if (contentItem.type === "text") {
+                  outputContent.push({ type: "output_text", text: asString(contentItem.text) });
+                } else if (contentItem.type === "thinking" || contentItem.type === "redacted_thinking") {
             // Reasoning already moved above
             continue;
           } else {
@@ -400,15 +443,15 @@ export function openaiToOpenAIResponsesRequest(
           const toolCall = toRecord(toolCallValue);
           const fn = toRecord(toolCall.function);
           // Skip tool calls with empty names to avoid infinite placeholder_tool loops
-          const fnName = toString(fn.name).trim();
+          const fnName = asString(fn.name).trim();
           if (!fnName) {
             continue;
           }
           input.push({
             type: "function_call",
-            call_id: toString(toolCall.id).trim() || generateToolCallId(),
+            call_id: asString(toolCall.id).trim() || generateToolCallId(),
             name: fnName,
-            arguments: toString(fn.arguments, "{}"),
+            arguments: asString(fn.arguments, "{}"),
           });
         }
       }
@@ -416,13 +459,13 @@ export function openaiToOpenAIResponsesRequest(
       // Handle deprecated function_call field (pre-tool_calls API)
       if (msg.function_call && !msg.tool_calls) {
         const fc = toRecord(msg.function_call);
-        const fnName = toString(fc.name).trim();
+        const fnName = asString(fc.name).trim();
         if (fnName) {
           input.push({
             type: "function_call",
             call_id: `call_${fnName}`,
             name: fnName,
-            arguments: toString(fc.arguments, "{}"),
+            arguments: asString(fc.arguments, "{}"),
           });
         }
       }
@@ -432,17 +475,17 @@ export function openaiToOpenAIResponsesRequest(
     if (role === "tool") {
       input.push({
         type: "function_call_output",
-        call_id: toString(msg.tool_call_id),
+        call_id: asString(msg.tool_call_id),
         output:
           typeof msg.content === "string"
             ? msg.content
             : Array.isArray(msg.content)
               ? msg.content.map((c) => {
-                  const part = toRecord(c);
-                  if (part.type === "text")
-                    return { type: "input_text", text: toString(part.text) };
-                  return c;
-                })
+                const part = toRecord(c);
+                if (part.type === "text")
+                  return { type: "input_text", text: asString(part.text) };
+                return c;
+              })
               : String(msg.content ?? ""),
       });
     }
@@ -451,7 +494,7 @@ export function openaiToOpenAIResponsesRequest(
     if (role === "function") {
       input.push({
         type: "function_call_output",
-        call_id: `call_${toString(msg.name)}`,
+        call_id: `call_${asString(msg.name)}`,
         output: typeof msg.content === "string" ? msg.content : String(msg.content ?? ""),
       });
     }
@@ -486,8 +529,8 @@ export function openaiToOpenAIResponsesRequest(
         const fn = toRecord(tool.function);
         return {
           type: "function",
-          name: toString(fn.name),
-          description: toString(fn.description),
+          name: asString(fn.name),
+          description: asString(fn.description),
           parameters: fn.parameters,
           strict: fn.strict,
         };

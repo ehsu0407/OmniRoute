@@ -215,6 +215,71 @@ test("Responses→Chat: built-in tool_choice type throws unsupported error", () 
   );
 });
 
+test("Responses→Chat: developer and system input items are hoisted into instructions", () => {
+  const body = {
+    model: "gpt-4",
+    input: [
+      {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: "Developer guardrails" }],
+      },
+      {
+        type: "message",
+        role: "system",
+        content: [{ type: "input_text", text: "System policy" }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ],
+  };
+
+  const result = openaiResponsesToOpenAIRequest(null, body, null, null);
+
+  assert.equal(result.messages[0].role, "system");
+  assert.equal(result.messages[0].content, "Developer guardrails\n\nSystem policy");
+  assert.equal(result.messages[1].role, "user");
+  assert.equal(result.messages.length, 2);
+});
+
+test("Responses→Chat: existing instructions are preserved and developer/system input is appended", () => {
+  const body = {
+    model: "gpt-4",
+    instructions: "Existing instructions",
+    input: [
+      {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: "Developer guardrails" }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ],
+  };
+
+  const result = openaiResponsesToOpenAIRequest(null, body, null, null);
+
+  assert.equal(result.messages[0].role, "system");
+  assert.equal(result.messages[0].content, "Existing instructions\n\nDeveloper guardrails");
+});
+
+test("Responses→Chat: max_output_tokens is stripped during translation", () => {
+  const body = {
+    model: "gpt-4",
+    max_output_tokens: 123,
+    input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] }],
+  };
+
+  const result = openaiResponsesToOpenAIRequest(null, body, null, null);
+  assert.equal("max_output_tokens" in result, false);
+});
+
 test("Responses→Chat: web_search tool type throws unsupported error", () => {
   const body = {
     model: "gpt-4",
@@ -369,7 +434,10 @@ test("Chat→Responses streaming: usage-only chunk is captured (not dropped)", (
   const completedEvent = finishEvents.find((e) => e.event === "response.completed");
   assert.ok(completedEvent, "should have completed event");
   assert.ok(completedEvent.data.response.usage, "completed event should include usage");
+  assert.equal(completedEvent.data.response.usage.input_tokens, 10);
+  assert.equal(completedEvent.data.response.usage.output_tokens, 5);
   assert.equal(completedEvent.data.response.usage.prompt_tokens, 10);
+  assert.equal(completedEvent.data.response.usage.completion_tokens, 5);
 });
 
 test("Chat→Responses streaming: completed event includes accumulated output", () => {

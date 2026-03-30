@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { normalizeChatUsageToResponsesUsage } from "../translator/helpers/responsesUsage.ts";
 /**
  * Responses API Transformer
  * Converts OpenAI Chat Completions SSE to Codex Responses API SSE format
@@ -289,8 +290,9 @@ export function createResponsesApiTransformStream(logger = null) {
         output,
       };
 
-      if (state.usage) {
-        response.usage = state.usage;
+      const normalizedUsage = normalizeChatUsageToResponsesUsage(state.usage);
+      if (normalizedUsage) {
+        response.usage = normalizedUsage;
       }
 
       emit(controller, "response.completed", {
@@ -318,23 +320,28 @@ export function createResponsesApiTransformStream(logger = null) {
         const dataStr = dataMatch[1].trim();
         if (dataStr === "[DONE]") continue;
 
-        let parsed;
+        let parsed: Record<string, unknown>;
         try {
           parsed = JSON.parse(dataStr);
         } catch {
           continue;
         }
 
-        if (!parsed.choices?.length) {
+        const parsedChoices: unknown[] = Array.isArray(parsed.choices) ? parsed.choices : [];
+
+        if (!parsedChoices.length) {
           if (parsed.usage) {
             state.usage = parsed.usage;
           }
           continue;
         }
 
-        const choice = parsed.choices[0];
-        const idx = choice.index || 0;
-        const delta = choice.delta || {};
+        const choice = (parsedChoices[0] as Record<string, unknown>) || {};
+        const idx = typeof choice.index === "number" ? choice.index : 0;
+        const delta =
+          choice.delta && typeof choice.delta === "object" && !Array.isArray(choice.delta)
+            ? (choice.delta as Record<string, unknown>)
+            : {};
 
         // Emit initial events
         if (!state.started) {
@@ -366,14 +373,17 @@ export function createResponsesApiTransformStream(logger = null) {
         }
 
         // Handle reasoning_content (OpenAI native format)
-        if (delta.reasoning_content) {
+        const reasoningContent =
+          typeof delta.reasoning_content === "string" ? delta.reasoning_content : "";
+        if (reasoningContent) {
           startReasoning(controller, idx);
-          emitReasoningDelta(controller, delta.reasoning_content);
+          emitReasoningDelta(controller, reasoningContent);
         }
 
         // Handle text content (may contain <think> tags)
-        if (delta.content) {
-          let content = delta.content;
+        const deltaContent = typeof delta.content === "string" ? delta.content : "";
+        if (deltaContent) {
+          let content = deltaContent;
 
           if (content.includes("<think>")) {
             state.inThinking = true;
@@ -437,13 +447,22 @@ export function createResponsesApiTransformStream(logger = null) {
         }
 
         // Handle tool_calls
-        if (delta.tool_calls) {
+        const toolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+        if (toolCalls.length > 0) {
           closeMessage(controller, idx);
 
-          for (const tc of delta.tool_calls) {
-            const tcIdx = tc.index ?? 0;
-            const newCallId = tc.id;
-            const funcName = tc.function?.name;
+          for (const toolCallValue of toolCalls) {
+            const tc =
+              toolCallValue && typeof toolCallValue === "object" && !Array.isArray(toolCallValue)
+                ? (toolCallValue as Record<string, unknown>)
+                : {};
+            const tcIdx = typeof tc.index === "number" ? tc.index : 0;
+            const newCallId = typeof tc.id === "string" ? tc.id : undefined;
+            const functionRecord =
+              tc.function && typeof tc.function === "object" && !Array.isArray(tc.function)
+                ? (tc.function as Record<string, unknown>)
+                : {};
+            const funcName = typeof functionRecord.name === "string" ? functionRecord.name : undefined;
 
             // T37: Prevent merging if a new tool_call uses the same index
             if (state.funcCallIds[tcIdx] && newCallId && state.funcCallIds[tcIdx] !== newCallId) {
@@ -475,23 +494,25 @@ export function createResponsesApiTransformStream(logger = null) {
 
             if (!state.funcArgsBuf[tcIdx]) state.funcArgsBuf[tcIdx] = "";
 
-            if (tc.function?.arguments) {
+            const functionArguments =
+              typeof functionRecord.arguments === "string" ? functionRecord.arguments : "";
+            if (functionArguments) {
               const refCallId = state.funcCallIds[tcIdx] || newCallId;
               if (refCallId) {
                 emit(controller, "response.function_call_arguments.delta", {
                   type: "response.function_call_arguments.delta",
                   item_id: `fc_${refCallId}`,
                   output_index: tcIdx,
-                  delta: tc.function.arguments,
+                  delta: functionArguments,
                 });
               }
-              state.funcArgsBuf[tcIdx] += tc.function.arguments;
+              state.funcArgsBuf[tcIdx] += functionArguments;
             }
           }
         }
 
         // Handle finish_reason
-        if (choice.finish_reason) {
+        if (typeof choice.finish_reason === "string" && choice.finish_reason) {
           for (const i in state.msgItemAdded) closeMessage(controller, i);
           closeReasoning(controller);
           for (const i in state.funcCallIds) closeToolCall(controller, i);

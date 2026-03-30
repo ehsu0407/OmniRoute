@@ -4,6 +4,7 @@
  */
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
+import { normalizeChatUsageToResponsesUsage } from "../helpers/responsesUsage.ts";
 
 /**
  * Translate OpenAI chunk to Responses API events
@@ -379,9 +380,10 @@ function sendCompleted(state, emit) {
       output,
     };
 
-    if (state.usage) {
-      response.usage = state.usage;
-    }
+      const normalizedUsage = normalizeChatUsageToResponsesUsage(state.usage);
+      if (normalizedUsage) {
+        response.usage = normalizedUsage;
+      }
 
     emit("response.completed", {
       type: "response.completed",
